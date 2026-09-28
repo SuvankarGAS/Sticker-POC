@@ -1,0 +1,4 @@
+﻿<Solution>
+  <Project Path="DoodleStickers.csproj" />
+  <Project Path="DoodleStickers.Editor.csproj" />
+</Solution>
