@@ -8,6 +8,8 @@
 #define DOODLE_STICKER_MIN_PEEL_DISTANCE 1e-4
 #define DOODLE_STICKER_HIGHLIGHT_ANGLE 0.55
 #define DOODLE_STICKER_HIGHLIGHT_EXPONENT 24.0
+#define DOODLE_STICKER_SHEEN_ANGLE 0.35
+#define DOODLE_STICKER_GLUE_BLOTCH_SCALE 0.08
 
 float _StickerOpacity;
 
@@ -28,6 +30,15 @@ fixed4 _PageCurlBackfaceColor;
 float _PageCurlArtBleed;
 sampler2D _PageCurlBackfaceTexture;
 float4 _PageCurlBackfaceTexture_ST;
+
+fixed4 _PageCurlEdgeColor;
+float _PageCurlEdgeWidth;
+float _PageCurlSheenStrength;
+float _PageCurlSheenWidth;
+float _PageCurlFoldShading;
+fixed4 _PageCurlGlueMarkColor;
+float _PaperGrainStrength;
+float _PaperGrainScale;
 
 struct DoodleStickerSurface
 {
@@ -96,9 +107,41 @@ fixed4 SampleStickerArt(DoodleStickerSamplingContext context, float2 sourceStick
     return artColor;
 }
 
+float HashPaperCell(float2 cell)
+{
+    return frac(sin(dot(cell, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float EvaluateValueNoise(float2 position)
+{
+    float2 cell = floor(position);
+    float2 blend = frac(position);
+    blend = blend * blend * (3.0 - 2.0 * blend);
+    float bottom = lerp(HashPaperCell(cell), HashPaperCell(cell + float2(1.0, 0.0)), blend.x);
+    float top = lerp(HashPaperCell(cell + float2(0.0, 1.0)), HashPaperCell(cell + float2(1.0, 1.0)), blend.x);
+    return lerp(bottom, top, blend.y);
+}
+
+float EvaluateCutEdge(DoodleStickerSamplingContext context, float2 sourceStickerUV, float centerAlpha)
+{
+    float2 tapOffset = context.stickerEdgeSoftness * _PageCurlEdgeWidth;
+    float minimumNeighbourAlpha = min(
+        min(SampleStickerArt(context, sourceStickerUV + float2(tapOffset.x, tapOffset.y)).a,
+            SampleStickerArt(context, sourceStickerUV + float2(-tapOffset.x, tapOffset.y)).a),
+        min(SampleStickerArt(context, sourceStickerUV + float2(tapOffset.x, -tapOffset.y)).a,
+            SampleStickerArt(context, sourceStickerUV + float2(-tapOffset.x, -tapOffset.y)).a));
+    return saturate(1.0 - minimumNeighbourAlpha) * centerAlpha;
+}
+
 fixed3 EvaluateBackfaceColor(DoodleStickerSamplingContext context, float2 sourceStickerUV, fixed3 artColor)
 {
     fixed3 backfaceColor = _PageCurlBackfaceColor.rgb;
+
+    #ifdef _DOODLE_STICKER_PAPER_DETAIL
+    float paperGrain = EvaluateValueNoise(sourceStickerUV * _PaperGrainScale) * 0.65
+        + EvaluateValueNoise(sourceStickerUV * _PaperGrainScale * 2.7) * 0.35;
+    backfaceColor *= 1.0 + (paperGrain - 0.5) * 2.0 * _PaperGrainStrength;
+    #endif
 
     #ifdef _DOODLE_STICKER_BACKFACE_TEXTURE
     float2 backfaceUV = TRANSFORM_TEX(sourceStickerUV, _PageCurlBackfaceTexture);
@@ -137,22 +180,33 @@ DoodleStickerSheetLayers EvaluateSheetLayers(DoodleStickerFold fold, float2 curl
     return layers;
 }
 
-float EvaluateDropShadowCaster(DoodleStickerSamplingContext context, DoodleStickerFold fold, float2 curlPoint, float2 curlSpaceScale, float edgeWidth)
+float EvaluateShadowCasterAt(DoodleStickerSamplingContext context, DoodleStickerFold fold, float2 casterCurlPoint, float2 curlSpaceScale, float shadowEdgeWidth, bool includeRollingPart)
 {
-    float shadowBlurScale = max(1.0, _PageCurlShadowSoftness / edgeWidth);
-    DoodleStickerSamplingContext blurredContext = context;
-    blurredContext.atlasUVDdx *= shadowBlurScale;
-    blurredContext.atlasUVDdy *= shadowBlurScale;
-    blurredContext.stickerEdgeSoftness *= shadowBlurScale;
-
-    float shadowEdgeWidth = max(edgeWidth, _PageCurlShadowSoftness);
-    DoodleStickerSheetLayers casterLayers = EvaluateSheetLayers(fold, curlPoint - _PageCurlShadowOffset.xy, curlSpaceScale);
+    DoodleStickerSheetLayers casterLayers = EvaluateSheetLayers(fold, casterCurlPoint, curlSpaceScale);
     float casterSheetCoverage = saturate((fold.radius - casterLayers.distanceFromFold) / shadowEdgeWidth + 0.5);
-    float casterLiftedMask = saturate(casterLayers.distanceFromFold / shadowEdgeWidth + 0.5);
+    float casterAlpha = SampleStickerArt(context, casterLayers.upperSourceUV).a;
 
-    float upperCasterAlpha = SampleStickerArt(blurredContext, casterLayers.upperSourceUV).a;
-    float lowerCasterAlpha = SampleStickerArt(blurredContext, casterLayers.lowerSourceUV).a * casterLiftedMask;
-    return max(upperCasterAlpha, lowerCasterAlpha) * casterSheetCoverage;
+    if (includeRollingPart)
+    {
+        float casterLiftedMask = saturate(casterLayers.distanceFromFold / shadowEdgeWidth + 0.5);
+        casterAlpha = max(casterAlpha, SampleStickerArt(context, casterLayers.lowerSourceUV).a * casterLiftedMask);
+    }
+    return casterAlpha * casterSheetCoverage;
+}
+
+float EvaluateDropShadowCaster(DoodleStickerSamplingContext context, DoodleStickerFold fold, float2 curlPoint, float2 curlSpaceScale, float edgeWidth, float receiverDistanceFromFold)
+{
+    float casterHeightFraction = saturate(abs(receiverDistanceFromFold) / (2.0 * fold.radius));
+    float2 shadowCentre = curlPoint - _PageCurlShadowOffset.xy * casterHeightFraction;
+    float shadowEdgeWidth = max(edgeWidth, _PageCurlShadowSoftness);
+    float tapRadius = _PageCurlShadowSoftness * 0.7071;
+
+    float blurredCaster = EvaluateShadowCasterAt(context, fold, shadowCentre, curlSpaceScale, shadowEdgeWidth, true) * 0.36;
+    blurredCaster += EvaluateShadowCasterAt(context, fold, shadowCentre + float2(tapRadius, tapRadius), curlSpaceScale, shadowEdgeWidth, false) * 0.16;
+    blurredCaster += EvaluateShadowCasterAt(context, fold, shadowCentre + float2(-tapRadius, tapRadius), curlSpaceScale, shadowEdgeWidth, false) * 0.16;
+    blurredCaster += EvaluateShadowCasterAt(context, fold, shadowCentre + float2(tapRadius, -tapRadius), curlSpaceScale, shadowEdgeWidth, false) * 0.16;
+    blurredCaster += EvaluateShadowCasterAt(context, fold, shadowCentre + float2(-tapRadius, -tapRadius), curlSpaceScale, shadowEdgeWidth, false) * 0.16;
+    return blurredCaster;
 }
 
 float4 EvaluatePeeledSticker(DoodleStickerSamplingContext context, DoodleStickerSurface surface, float edgeWidth)
@@ -178,19 +232,46 @@ float4 EvaluatePeeledSticker(DoodleStickerSamplingContext context, DoodleSticker
         * exp(-max(layers.distanceFromFold - fold.radius, 0.0) / shadowSoftness);
 
     #ifdef _DOODLE_STICKER_DROP_SHADOW
-    float dropShadow = EvaluateDropShadowCaster(context, fold, curlPoint, surface.curlSpaceScale, edgeWidth);
+    float dropShadow = EvaluateDropShadowCaster(context, fold, curlPoint, surface.curlSpaceScale, edgeWidth, layers.distanceFromFold);
     #else
     float dropShadow = 0.0;
     #endif
 
     float stuckShadowAlpha = saturate(dropShadow * _PageCurlShadowColor.a);
     float liftedShadowAlpha = saturate(max(contactShadow, dropShadow) * _PageCurlShadowColor.a);
-    fixed3 upperColor = saturate(EvaluateBackfaceColor(context, layers.upperSourceUV, upperArt.rgb) * curlShade + curlHighlight);
+    fixed3 backfaceColor = EvaluateBackfaceColor(context, layers.upperSourceUV, upperArt.rgb);
+
+    float flapShade = 1.0;
+    float sheen = 0.0;
+    float cutEdge = 0.0;
+    float4 glueMarkLayer = 0.0;
+
+    #ifdef _DOODLE_STICKER_PAPER_DETAIL
+    float foldedDistance = max(-layers.distanceFromFold, 0.0);
+    flapShade = 1.0 - _PageCurlFoldShading * 0.25 * saturate(foldedDistance / (4.0 * fold.radius));
+
+    float sheenExponent = lerp(40.0, 3.0, _PageCurlSheenWidth);
+    float flapSheenReach = fold.radius * (1.0 + 6.0 * _PageCurlSheenWidth);
+    float sheenPosition = layers.distanceFromFold < 0.0 ? -foldedDistance / flapSheenReach : layers.curlAngle;
+    sheen = _PageCurlSheenStrength * pow(saturate(cos(sheenPosition - DOODLE_STICKER_SHEEN_ANGLE)), sheenExponent);
+
+    cutEdge = EvaluateCutEdge(context, layers.upperSourceUV, upperArt.a) * _PageCurlEdgeColor.a;
+
+    float originalArtAlpha = SampleStickerArt(context, surface.stickerUV).a;
+    float glueBlotch = lerp(0.55, 1.0, EvaluateValueNoise(surface.stickerUV * _PaperGrainScale * DOODLE_STICKER_GLUE_BLOTCH_SCALE));
+    float glueMarkAlpha = _PageCurlGlueMarkColor.a * originalArtAlpha * liftedMask * glueBlotch;
+    glueMarkLayer = float4(_PageCurlGlueMarkColor.rgb * glueMarkAlpha, glueMarkAlpha);
+    #endif
+
+    fixed3 upperColor = saturate(backfaceColor * curlShade * flapShade + curlHighlight + sheen);
+    upperColor = lerp(upperColor, _PageCurlEdgeColor.rgb * curlShade, cutEdge);
 
     float4 stuckRegionColor = float4(lowerArt.rgb * lowerArt.a, lowerArt.a) * (1.0 - stuckShadowAlpha)
         + float4(_PageCurlShadowColor.rgb * stuckShadowAlpha, stuckShadowAlpha);
 
-    float4 liftedRegionColor = float4(_PageCurlShadowColor.rgb * liftedShadowAlpha, liftedShadowAlpha) * (1.0 - liftedLowerAlpha)
+    float4 exposedPageColor = glueMarkLayer * (1.0 - liftedShadowAlpha)
+        + float4(_PageCurlShadowColor.rgb * liftedShadowAlpha, liftedShadowAlpha);
+    float4 liftedRegionColor = exposedPageColor * (1.0 - liftedLowerAlpha)
         + float4(lowerArt.rgb * curlShade * liftedLowerAlpha, liftedLowerAlpha);
 
     float4 stickerColor = lerp(stuckRegionColor, liftedRegionColor, liftedMask);

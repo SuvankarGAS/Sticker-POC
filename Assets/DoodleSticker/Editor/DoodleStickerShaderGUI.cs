@@ -32,6 +32,8 @@ namespace DoodleStickers.EditorTooling
         }
 
         private const string BackfaceTextureToggleName = "_PageCurlUseBackfaceTexture";
+        private const string PaperDetailToggleName = "_PaperDetail";
+        private const string PaperDetailKeyword = "_DOODLE_STICKER_PAPER_DETAIL";
         private const string BackfaceTextureName = "_PageCurlBackfaceTexture";
         private const string SectionExpandedKeyPrefix = "DoodleStickers.ShaderGUI.";
 
@@ -53,12 +55,22 @@ namespace DoodleStickers.EditorTooling
                 new PropertyDescription("_PageCurlShadowColor", "Color", "Shadow color. Alpha controls shadow strength."),
                 new PropertyDescription("_PageCurlShadowSoftness", "Softness", "Blur of the shadow edge, as a fraction of the sticker's longest side."),
                 new PropertyDescription("_PageCurlShadowOffset", "Offset (XY)", "Direction and distance the lifted flap's shadow falls, as a fraction of the sticker's longest side. Z and W are unused."),
-                new PropertyDescription("_PageCurlDropShadow", "Drop Shadow", "Cast a soft shadow of the whole lifted flap. Turning it off keeps only the contact shadow at the base of the curl and saves two texture samples.")),
+                new PropertyDescription("_PageCurlDropShadow", "Drop Shadow", "Cast a soft shadow of the whole lifted flap. Turning it off keeps only the contact shadow at the base of the curl and saves six texture samples.")),
             new SectionDescription("Backface",
                 new PropertyDescription("_PageCurlBackfaceColor", "Color", "Color of the back of the sticker paper."),
                 new PropertyDescription(BackfaceTextureToggleName, "Use Texture", "Multiply the backface by a paper or glue texture."),
                 new PropertyDescription(BackfaceTextureName, "Texture", "Paper or glue texture for the back of the sticker. Set its Wrap Mode to Repeat when tiling it."),
                 new PropertyDescription("_PageCurlArtBleed", "Art Bleed", "How much of the printed art shows through the back of the paper, mirrored.")),
+            new SectionDescription("Paper Detail",
+                new PropertyDescription(PaperDetailToggleName, "Enabled", "Paper sticker cues on the back: cut edge, adhesive sheen, fold shading, glue mark and grain. Costs about 5 extra texture reads per pixel, only on stickers that are curling."),
+                new PropertyDescription("_PageCurlEdgeColor", "Cut Edge Color", "Color of the thin cut edge around the back of the sticker. Alpha controls its strength."),
+                new PropertyDescription("_PageCurlEdgeWidth", "Cut Edge Width", "Width of the cut edge, in screen pixels."),
+                new PropertyDescription("_PageCurlSheenStrength", "Adhesive Sheen", "Soft shine of the adhesive side that slides across the back as the curl changes."),
+                new PropertyDescription("_PageCurlSheenWidth", "Sheen Width", "Low values give a tight glossy band, high values a broad soft paper sheen."),
+                new PropertyDescription("_PageCurlFoldShading", "Fold Shading", "Darkening of the back of the paper toward the free end of the folded flap. Never affects the printed art."),
+                new PropertyDescription("_PageCurlGlueMarkColor", "Glue Mark", "Faint mark left on the page where the sticker has lifted. Alpha controls its strength."),
+                new PropertyDescription("_PaperGrainStrength", "Paper Grain", "Strength of the fine fibre grain on the back of the paper."),
+                new PropertyDescription("_PaperGrainScale", "Paper Grain Scale", "How fine the paper grain is. Higher values give smaller grain.")),
             new SectionDescription("Rendering",
                 new PropertyDescription("PixelSnap", "Pixel Snap", "Snap vertices to screen pixels for crisp pixel art."),
                 new PropertyDescription("_UseUIAlphaClip", "Use Alpha Clip", "Discard fully transparent pixels. Needed only for some UI masking setups."))
@@ -114,11 +126,85 @@ namespace DoodleStickers.EditorTooling
             }
 
             EditorGUILayout.Space();
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.PrefixLabel("Presets");
+                if (GUILayout.Button(new GUIContent("Paper Sticker", "Warm off-white back, soft sheen, print showing through, visible cut edge and grain.")))
+                {
+                    ApplyPresetToTargets(materialEditor, ApplyPaperPreset);
+                }
+                if (GUILayout.Button(new GUIContent("Glossy Vinyl", "Bright white back, strong tight sheen, clean edge, no grain.")))
+                {
+                    ApplyPresetToTargets(materialEditor, ApplyGlossyVinylPreset);
+                }
+            }
+
+            EditorGUILayout.Space();
             materialEditor.RenderQueueField();
             EditorGUILayout.HelpBox(
                 "Sprite stickers render with per-texture copies of this material. Edits made here in the editor apply immediately; " +
                 "after changing this material from a script at runtime, call DoodleStickerMaterialCache.RefreshFromTemplates().",
                 MessageType.None);
+        }
+
+        public static void ApplyPaperPreset(Material material)
+        {
+            material.SetColor("_PageCurlBackfaceColor", new Color(0.96f, 0.94f, 0.89f, 1f));
+            material.SetFloat("_PageCurlArtBleed", 0.05f);
+            material.SetFloat("_PageCurlShading", 0.5f);
+            material.SetFloat("_PageCurlHighlightStrength", 0.15f);
+            material.SetColor("_PageCurlEdgeColor", new Color(0.7f, 0.66f, 0.58f, 0.85f));
+            material.SetFloat("_PageCurlEdgeWidth", 1.5f);
+            material.SetFloat("_PageCurlSheenStrength", 0.2f);
+            material.SetFloat("_PageCurlSheenWidth", 0.7f);
+            material.SetFloat("_PageCurlFoldShading", 0.4f);
+            material.SetColor("_PageCurlGlueMarkColor", new Color(0.5f, 0.45f, 0.35f, 0.05f));
+            material.SetFloat("_PaperGrainStrength", 0.05f);
+            material.SetFloat("_PaperGrainScale", 350f);
+            SetPaperDetail(material, true);
+        }
+
+        public static void ApplyGlossyVinylPreset(Material material)
+        {
+            material.SetColor("_PageCurlBackfaceColor", new Color(1f, 1f, 1f, 1f));
+            material.SetFloat("_PageCurlArtBleed", 0.02f);
+            material.SetFloat("_PageCurlShading", 0.6f);
+            material.SetFloat("_PageCurlHighlightStrength", 0.45f);
+            material.SetColor("_PageCurlEdgeColor", new Color(0.82f, 0.82f, 0.84f, 0.6f));
+            material.SetFloat("_PageCurlEdgeWidth", 1f);
+            material.SetFloat("_PageCurlSheenStrength", 0.45f);
+            material.SetFloat("_PageCurlSheenWidth", 0.2f);
+            material.SetFloat("_PageCurlFoldShading", 0.3f);
+            material.SetColor("_PageCurlGlueMarkColor", new Color(0.6f, 0.6f, 0.6f, 0.08f));
+            material.SetFloat("_PaperGrainStrength", 0f);
+            material.SetFloat("_PaperGrainScale", 350f);
+            SetPaperDetail(material, true);
+        }
+
+        private static void SetPaperDetail(Material material, bool isEnabled)
+        {
+            material.SetFloat(PaperDetailToggleName, isEnabled ? 1f : 0f);
+            if (isEnabled)
+            {
+                material.EnableKeyword(PaperDetailKeyword);
+            }
+            else
+            {
+                material.DisableKeyword(PaperDetailKeyword);
+            }
+        }
+
+        private static void ApplyPresetToTargets(MaterialEditor materialEditor, System.Action<Material> applyPreset)
+        {
+            Undo.RecordObjects(materialEditor.targets, "Apply Doodle Sticker Preset");
+            foreach (Object target in materialEditor.targets)
+            {
+                if (target is Material material)
+                {
+                    applyPreset(material);
+                    EditorUtility.SetDirty(material);
+                }
+            }
         }
 
         private static bool HasAnyProperty(SectionDescription section, MaterialProperty[] properties)

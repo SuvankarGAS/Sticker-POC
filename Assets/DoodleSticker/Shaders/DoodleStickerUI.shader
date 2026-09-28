@@ -20,10 +20,20 @@ Shader "Effects/Doodle Sticker UI"
         _PageCurlShadowOffset ("Page Curl Shadow Offset", Vector) = (0.015,-0.025,0,0)
         [Toggle(_DOODLE_STICKER_DROP_SHADOW)] _PageCurlDropShadow ("Page Curl Drop Shadow", Float) = 1
 
-        _PageCurlBackfaceColor ("Page Curl Backface Color", Color) = (1,1,1,1)
+        _PageCurlBackfaceColor ("Page Curl Backface Color", Color) = (0.96,0.94,0.89,1)
         [Toggle(_DOODLE_STICKER_BACKFACE_TEXTURE)] _PageCurlUseBackfaceTexture ("Page Curl Use Backface Texture", Float) = 0
         _PageCurlBackfaceTexture ("Page Curl Backface Texture", 2D) = "white" {}
-        _PageCurlArtBleed ("Page Curl Art Bleed", Range(0, 1)) = 0.08
+        _PageCurlArtBleed ("Page Curl Art Bleed", Range(0, 1)) = 0.05
+
+        [Toggle(_DOODLE_STICKER_PAPER_DETAIL)] _PaperDetail ("Paper Detail", Float) = 1
+        _PageCurlEdgeColor ("Page Curl Edge Color", Color) = (0.7,0.66,0.58,0.85)
+        _PageCurlEdgeWidth ("Page Curl Edge Width", Range(0.5, 4)) = 1.5
+        _PageCurlSheenStrength ("Page Curl Sheen Strength", Range(0, 1)) = 0.2
+        _PageCurlSheenWidth ("Page Curl Sheen Width", Range(0, 1)) = 0.7
+        _PageCurlFoldShading ("Page Curl Fold Shading", Range(0, 1)) = 0.4
+        _PageCurlGlueMarkColor ("Page Curl Glue Mark Color", Color) = (0.5,0.45,0.35,0.05)
+        _PaperGrainStrength ("Paper Grain Strength", Range(0, 0.3)) = 0.05
+        _PaperGrainScale ("Paper Grain Scale", Range(50, 800)) = 350
 
         [HideInInspector] _StencilComp ("Stencil Comparison", Float) = 8
         [HideInInspector] _Stencil ("Stencil ID", Float) = 0
@@ -74,6 +84,7 @@ Shader "Effects/Doodle Sticker UI"
             #pragma shader_feature_local _DOODLE_STICKER_UNSCALED_TIME
             #pragma shader_feature_local _DOODLE_STICKER_DROP_SHADOW
             #pragma shader_feature_local _DOODLE_STICKER_BACKFACE_TEXTURE
+            #pragma shader_feature_local _DOODLE_STICKER_PAPER_DETAIL
 
             #include "UnityCG.cginc"
             #include "UnityUI.cginc"
