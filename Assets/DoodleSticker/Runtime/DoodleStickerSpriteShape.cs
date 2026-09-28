@@ -10,14 +10,40 @@ namespace DoodleStickers
         PhysicsShape
     }
 
+    public readonly struct DoodleStickerGrabEdge
+    {
+        public readonly bool IsValid;
+        public readonly float DistanceFromEdge;
+        public readonly Vector2 InwardDirection;
+
+        public DoodleStickerGrabEdge(float distanceFromEdge, Vector2 inwardDirection)
+        {
+            IsValid = true;
+            DistanceFromEdge = distanceFromEdge;
+            InwardDirection = inwardDirection;
+        }
+    }
+
     public sealed class DoodleStickerSpriteShape
     {
+        private const float OnEdgeDistance = 1e-5f;
+        private const float OutsideProbeDistance = 1e-3f;
+
         private static readonly List<Vector2> PhysicsShapeBuffer = new List<Vector2>();
 
         private readonly List<Vector2[]> physicsOutlines = new List<Vector2[]>();
         private Vector2[] meshStickerPoints = System.Array.Empty<Vector2>();
         private ushort[] meshTriangles = System.Array.Empty<ushort>();
         private Vector2[] sheetExtentPoints = System.Array.Empty<Vector2>();
+        private Vector2[] physicsEdgeSegments = System.Array.Empty<Vector2>();
+        private Vector2[] meshEdgeSegments = System.Array.Empty<Vector2>();
+        private static readonly Vector2[] RectEdgeSegments =
+        {
+            new Vector2(0f, 0f), new Vector2(1f, 0f),
+            new Vector2(1f, 0f), new Vector2(1f, 1f),
+            new Vector2(1f, 1f), new Vector2(0f, 1f),
+            new Vector2(0f, 1f), new Vector2(0f, 0f)
+        };
 
         public Sprite Sprite { get; private set; }
         public bool IsValid { get; private set; }
@@ -38,6 +64,8 @@ namespace DoodleStickers
             meshStickerPoints = System.Array.Empty<Vector2>();
             meshTriangles = System.Array.Empty<ushort>();
             sheetExtentPoints = System.Array.Empty<Vector2>();
+            physicsEdgeSegments = System.Array.Empty<Vector2>();
+            meshEdgeSegments = System.Array.Empty<Vector2>();
             IsValid = false;
             Texture = null;
             AlphaTexture = null;
@@ -90,7 +118,119 @@ namespace DoodleStickers
             }
 
             sheetExtentPoints = BuildSheetExtentPoints();
+            physicsEdgeSegments = BuildPhysicsEdgeSegments();
+            meshEdgeSegments = BuildMeshEdgeSegments();
             IsValid = Texture != null;
+        }
+
+        public DoodleStickerGrabEdge EvaluateGrabEdge(Vector2 stickerPoint, DoodleStickerHitTestMode hitTestMode)
+        {
+            Vector2[] edgeSegments = GetEdgeSegments(hitTestMode);
+            Vector2 curlPoint = Vector2.Scale(stickerPoint, CurlSpaceScale);
+            float nearestDistance = float.MaxValue;
+            Vector2 nearestCurlPoint = curlPoint;
+            Vector2 nearestSegmentDirection = Vector2.right;
+
+            for (int segmentIndex = 0; segmentIndex + 1 < edgeSegments.Length; segmentIndex += 2)
+            {
+                Vector2 segmentStart = Vector2.Scale(edgeSegments[segmentIndex], CurlSpaceScale);
+                Vector2 segmentEnd = Vector2.Scale(edgeSegments[segmentIndex + 1], CurlSpaceScale);
+                Vector2 segment = segmentEnd - segmentStart;
+                float segmentLengthSquared = segment.sqrMagnitude;
+                float along = segmentLengthSquared > 0f ? Mathf.Clamp01(Vector2.Dot(curlPoint - segmentStart, segment) / segmentLengthSquared) : 0f;
+                Vector2 closestPoint = segmentStart + segment * along;
+                float distance = (curlPoint - closestPoint).magnitude;
+                if (distance < nearestDistance)
+                {
+                    nearestDistance = distance;
+                    nearestCurlPoint = closestPoint;
+                    nearestSegmentDirection = segmentLengthSquared > 0f ? segment / Mathf.Sqrt(segmentLengthSquared) : Vector2.right;
+                }
+            }
+
+            if (nearestDistance == float.MaxValue)
+            {
+                return default;
+            }
+
+            Vector2 outwardDirection;
+            if (nearestDistance > OnEdgeDistance)
+            {
+                outwardDirection = (nearestCurlPoint - curlPoint) / nearestDistance;
+            }
+            else
+            {
+                outwardDirection = new Vector2(-nearestSegmentDirection.y, nearestSegmentDirection.x);
+                Vector2 probePoint = curlPoint + outwardDirection * OutsideProbeDistance;
+                if (Contains(new Vector2(probePoint.x / CurlSpaceScale.x, probePoint.y / CurlSpaceScale.y), hitTestMode))
+                {
+                    outwardDirection = -outwardDirection;
+                }
+            }
+
+            return new DoodleStickerGrabEdge(nearestDistance, -outwardDirection);
+        }
+
+        private Vector2[] GetEdgeSegments(DoodleStickerHitTestMode hitTestMode)
+        {
+            switch (hitTestMode)
+            {
+                case DoodleStickerHitTestMode.PhysicsShape when physicsEdgeSegments.Length > 0:
+                    return physicsEdgeSegments;
+                case DoodleStickerHitTestMode.PhysicsShape:
+                case DoodleStickerHitTestMode.SpriteMesh:
+                    return meshEdgeSegments.Length > 0 ? meshEdgeSegments : RectEdgeSegments;
+                default:
+                    return RectEdgeSegments;
+            }
+        }
+
+        private Vector2[] BuildPhysicsEdgeSegments()
+        {
+            List<Vector2> segmentPoints = new List<Vector2>();
+            for (int outlineIndex = 0; outlineIndex < physicsOutlines.Count; outlineIndex++)
+            {
+                Vector2[] outline = physicsOutlines[outlineIndex];
+                for (int pointIndex = 0; pointIndex < outline.Length; pointIndex++)
+                {
+                    segmentPoints.Add(outline[pointIndex]);
+                    segmentPoints.Add(outline[(pointIndex + 1) % outline.Length]);
+                }
+            }
+            return segmentPoints.ToArray();
+        }
+
+        private Vector2[] BuildMeshEdgeSegments()
+        {
+            Dictionary<long, int> edgeUseCounts = new Dictionary<long, int>();
+            for (int triangleStart = 0; triangleStart + 2 < meshTriangles.Length; triangleStart += 3)
+            {
+                for (int cornerIndex = 0; cornerIndex < 3; cornerIndex++)
+                {
+                    long edgeKey = MakeEdgeKey(meshTriangles[triangleStart + cornerIndex], meshTriangles[triangleStart + (cornerIndex + 1) % 3]);
+                    edgeUseCounts.TryGetValue(edgeKey, out int useCount);
+                    edgeUseCounts[edgeKey] = useCount + 1;
+                }
+            }
+
+            List<Vector2> segmentPoints = new List<Vector2>();
+            foreach (KeyValuePair<long, int> edgeUse in edgeUseCounts)
+            {
+                if (edgeUse.Value != 1)
+                {
+                    continue;
+                }
+                segmentPoints.Add(meshStickerPoints[(int)(edgeUse.Key >> 32)]);
+                segmentPoints.Add(meshStickerPoints[(int)(edgeUse.Key & 0xFFFFFFFF)]);
+            }
+            return segmentPoints.ToArray();
+        }
+
+        private static long MakeEdgeKey(int firstVertexIndex, int secondVertexIndex)
+        {
+            int lowerIndex = Mathf.Min(firstVertexIndex, secondVertexIndex);
+            int upperIndex = Mathf.Max(firstVertexIndex, secondVertexIndex);
+            return ((long)lowerIndex << 32) | (uint)upperIndex;
         }
 
         private Vector2[] BuildSheetExtentPoints()

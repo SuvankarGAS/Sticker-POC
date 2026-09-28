@@ -36,6 +36,18 @@ namespace DoodleStickers
         [Tooltip("What the sticker does when the pointer is released.")]
         [SerializeField] private DoodleStickerReleaseBehaviour releaseBehaviour = DoodleStickerReleaseBehaviour.Hold;
 
+        [Tooltip("Only start a peel when the sticker is grabbed near its edge, like a real sticker. Grabbing an already lifted flap always works.")]
+        [SerializeField] private bool requireEdgeGrab = true;
+
+        [Tooltip("How close to the edge of the art a grab must be to start a peel, as a fraction of the sticker's longest side.")]
+        [SerializeField, Range(0.01f, 0.5f)] private float edgeGrabDistance = 0.1f;
+
+        [Tooltip("Only lift the edge when it is pulled back over the sticker. Pulling outward keeps the sticker flat.")]
+        [SerializeField] private bool restrictPeelDirection = true;
+
+        [Tooltip("How far sideways from straight back over the sticker the pull may point, in degrees. Beyond this, the sideways part of the pull is ignored.")]
+        [SerializeField, Range(0f, 89f)] private float maximumPeelAngle = 70f;
+
         [Tooltip("Seconds the peel lags behind the pointer. 0 follows the pointer exactly.")]
         [SerializeField, Min(0f)] private float dragSmoothingTime = 0.03f;
 
@@ -126,6 +138,8 @@ namespace DoodleStickers
         [NonSerialized] private bool pendingAutomaticPeelEndsWithPeelOff;
         [NonSerialized] private Action pendingAutomaticPeelCallback;
         [NonSerialized] private Vector2[] sheetExtentPoints = System.Array.Empty<Vector2>();
+        [NonSerialized] private Vector2 peelInwardDirection;
+        [NonSerialized] private bool hasPeelDirection;
         [NonSerialized] private Vector2 peelOffDirection;
         [NonSerialized] private bool isContinuingExistingPeel;
         [NonSerialized] private bool isResistanceBypassed;
@@ -152,6 +166,35 @@ namespace DoodleStickers
         public float AutomaticPeelAngleVariation => automaticPeelAngleVariation;
         public float AutomaticEdgeMargin => automaticEdgeMargin;
         public float FlattenDuration => flattenDuration;
+        public bool RequireEdgeGrab
+        {
+            get => requireEdgeGrab;
+            set => requireEdgeGrab = value;
+        }
+
+        public float EdgeGrabDistance
+        {
+            get => edgeGrabDistance;
+            set => edgeGrabDistance = Mathf.Max(value, 0f);
+        }
+
+        public bool RestrictPeelDirection
+        {
+            get => restrictPeelDirection;
+            set => restrictPeelDirection = value;
+        }
+
+        public float MaximumPeelAngle
+        {
+            get => maximumPeelAngle;
+            set => maximumPeelAngle = Mathf.Clamp(value, 0f, 89f);
+        }
+
+        public bool CanStartNewPeelAt(DoodleStickerGrabEdge grabEdge)
+        {
+            return !requireEdgeGrab || (grabEdge.IsValid && grabEdge.DistanceFromEdge <= edgeGrabDistance);
+        }
+
         public bool IsAnimatingAutomatically => State == DoodleStickerPeelState.AutomaticallyPeeling || hasPendingAutomaticPeel;
 
         public Vector2 InitialGrabPoint
@@ -353,7 +396,7 @@ namespace DoodleStickers
             State = DoodleStickerPeelState.Resting;
         }
 
-        public bool TryBeginPointer(int pointerId, Vector2 stickerPoint, DoodleStickerSurfaceRegion touchedRegion)
+        public bool TryBeginPointer(int pointerId, Vector2 stickerPoint, DoodleStickerSurfaceRegion touchedRegion, DoodleStickerGrabEdge grabEdge = default)
         {
             if (activePointerId != int.MinValue || touchedRegion == DoodleStickerSurfaceRegion.None
                 || State == DoodleStickerPeelState.PeelingOff || State == DoodleStickerPeelState.PeeledOff)
@@ -361,10 +404,30 @@ namespace DoodleStickers
                 return false;
             }
 
+            bool startsNewPeel = touchedRegion == DoodleStickerSurfaceRegion.Stuck || IsFlat;
+            if (startsNewPeel && !CanStartNewPeelAt(grabEdge))
+            {
+                return false;
+            }
+
             ClearAutomaticAnimationRequests();
             activePointerId = pointerId;
             pointerVelocity = Vector2.zero;
-            bool startsNewPeel = touchedRegion == DoodleStickerSurfaceRegion.Stuck || IsFlat;
+
+            if (startsNewPeel)
+            {
+                hasPeelDirection = grabEdge.IsValid;
+                peelInwardDirection = grabEdge.InwardDirection;
+            }
+            else
+            {
+                Vector2 currentPeelOffset = Vector2.Scale(DragPoint - grabPoint, curlSpaceScale);
+                if (currentPeelOffset.sqrMagnitude > 1e-10f)
+                {
+                    peelInwardDirection = currentPeelOffset.normalized;
+                    hasPeelDirection = true;
+                }
+            }
 
             if (startsNewPeel)
             {
@@ -404,9 +467,10 @@ namespace DoodleStickers
                 return;
             }
 
-            targetRawDragPoint = isContinuingExistingPeel
+            Vector2 unconstrainedTarget = isContinuingExistingPeel
                 ? rawDragAnchorPoint + (stickerPoint - pointerAnchorPoint)
                 : stickerPoint;
+            targetRawDragPoint = ConstrainToPeelDirection(unconstrainedTarget);
         }
 
         public bool ReleasePointer(int pointerId)
@@ -465,6 +529,27 @@ namespace DoodleStickers
                 default:
                     return false;
             }
+        }
+
+        private Vector2 ConstrainToPeelDirection(Vector2 unconstrainedDragPoint)
+        {
+            if (!restrictPeelDirection || !hasPeelDirection)
+            {
+                return unconstrainedDragPoint;
+            }
+
+            Vector2 pullOffset = Vector2.Scale(unconstrainedDragPoint - grabPoint, curlSpaceScale);
+            float inwardPull = Vector2.Dot(pullOffset, peelInwardDirection);
+            if (inwardPull <= 0f)
+            {
+                return grabPoint;
+            }
+
+            Vector2 sidewaysDirection = new Vector2(-peelInwardDirection.y, peelInwardDirection.x);
+            float maximumSidewaysPull = inwardPull * Mathf.Tan(maximumPeelAngle * Mathf.Deg2Rad);
+            float sidewaysPull = Mathf.Clamp(Vector2.Dot(pullOffset, sidewaysDirection), -maximumSidewaysPull, maximumSidewaysPull);
+            Vector2 constrainedOffset = peelInwardDirection * inwardPull + sidewaysDirection * sidewaysPull;
+            return grabPoint + CurlToStickerSpace(constrainedOffset);
         }
 
         private void TickDragging(float deltaTime)

@@ -6,10 +6,17 @@ using UnityEngine;
 
 namespace DoodleStickers.EditorTooling
 {
+    public enum DoodleStickerTargetSizeMode
+    {
+        PowerOfTwo,
+        Custom
+    }
+
     public enum DoodleStickerCanvasShape
     {
-        Square,
-        PowerOfTwoPerAxis
+        FullTargetSize,
+        PowerOfTwoPerAxis,
+        FitToArt
     }
 
     public enum DoodleStickerMobileCompression
@@ -24,8 +31,12 @@ namespace DoodleStickers.EditorTooling
     [Serializable]
     public sealed class DoodleStickerSpriteResizeSettings
     {
+        public DoodleStickerTargetSizeMode targetSizeMode = DoodleStickerTargetSizeMode.PowerOfTwo;
         public int targetSize = 512;
-        public DoodleStickerCanvasShape canvasShape = DoodleStickerCanvasShape.Square;
+        public int customTargetWidth = 512;
+        public int customTargetHeight = 512;
+        public bool roundToMultipleOfFour = true;
+        public DoodleStickerCanvasShape canvasShape = DoodleStickerCanvasShape.FullTargetSize;
         public int padding = 4;
         public bool trimTransparentBorders = true;
         public bool allowUpscaling;
@@ -103,6 +114,8 @@ namespace DoodleStickers.EditorTooling
     public static class DoodleStickerSpriteResizer
     {
         public static readonly int[] PowerOfTwoSizes = { 32, 64, 128, 256, 512, 1024, 2048, 4096 };
+        public const int MinimumCustomSize = 4;
+        public const int MaximumCustomSize = 8192;
 
         private const byte OpaqueAlphaThreshold = 2;
         private static readonly string[] PlatformNames = { "Standalone", "Android", "iPhone", "WebGL", "Server" };
@@ -207,24 +220,20 @@ namespace DoodleStickers.EditorTooling
                 return DoodleStickerSpriteResizePlan.Invalid("The sprite is fully transparent.");
             }
 
-            int targetSize = Mathf.Max(1, settings.targetSize);
-            int padding = Mathf.Clamp(settings.padding, 0, targetSize / 4);
-            int availableSize = targetSize - padding * 2;
-            float uniformScale = Mathf.Min((float)availableSize / contentRect.width, (float)availableSize / contentRect.height);
+            Vector2Int targetSize = GetEffectiveTargetSize(settings);
+            int padding = Mathf.Clamp(settings.padding, 0, Mathf.Min(targetSize.x, targetSize.y) / 4);
+            Vector2Int availableSize = new Vector2Int(targetSize.x - padding * 2, targetSize.y - padding * 2);
+            float uniformScale = Mathf.Min((float)availableSize.x / contentRect.width, (float)availableSize.y / contentRect.height);
             if (!settings.allowUpscaling)
             {
                 uniformScale = Mathf.Min(uniformScale, 1f);
             }
 
             Vector2Int contentOutputSize = new Vector2Int(
-                Mathf.Clamp(Mathf.RoundToInt(contentRect.width * uniformScale), 1, availableSize),
-                Mathf.Clamp(Mathf.RoundToInt(contentRect.height * uniformScale), 1, availableSize));
+                Mathf.Clamp(Mathf.RoundToInt(contentRect.width * uniformScale), 1, availableSize.x),
+                Mathf.Clamp(Mathf.RoundToInt(contentRect.height * uniformScale), 1, availableSize.y));
 
-            Vector2Int canvasSize = settings.canvasShape == DoodleStickerCanvasShape.Square
-                ? new Vector2Int(targetSize, targetSize)
-                : new Vector2Int(
-                    Mathf.Min(Mathf.NextPowerOfTwo(contentOutputSize.x + padding * 2), targetSize),
-                    Mathf.Min(Mathf.NextPowerOfTwo(contentOutputSize.y + padding * 2), targetSize));
+            Vector2Int canvasSize = ResolveCanvasSize(settings, targetSize, contentOutputSize, padding);
 
             Vector2Int contentOffset = new Vector2Int(
                 (canvasSize.x - contentOutputSize.x) / 2,
@@ -232,6 +241,61 @@ namespace DoodleStickers.EditorTooling
 
             Vector2 scale = new Vector2((float)contentOutputSize.x / contentRect.width, (float)contentOutputSize.y / contentRect.height);
             return new DoodleStickerSpriteResizePlan(contentRect, contentOutputSize, canvasSize, contentOffset, scale);
+        }
+
+        public static Vector2Int GetEffectiveTargetSize(DoodleStickerSpriteResizeSettings settings)
+        {
+            if (settings.targetSizeMode == DoodleStickerTargetSizeMode.PowerOfTwo)
+            {
+                int powerOfTwoSize = Mathf.Clamp(Mathf.ClosestPowerOfTwo(Mathf.Max(settings.targetSize, 1)), PowerOfTwoSizes[0], PowerOfTwoSizes[PowerOfTwoSizes.Length - 1]);
+                return new Vector2Int(powerOfTwoSize, powerOfTwoSize);
+            }
+
+            Vector2Int customSize = new Vector2Int(
+                Mathf.Clamp(settings.customTargetWidth, MinimumCustomSize, MaximumCustomSize),
+                Mathf.Clamp(settings.customTargetHeight, MinimumCustomSize, MaximumCustomSize));
+            return settings.roundToMultipleOfFour
+                ? new Vector2Int(customSize.x / 4 * 4, customSize.y / 4 * 4)
+                : customSize;
+        }
+
+        public static DoodleStickerCanvasShape GetEffectiveCanvasShape(DoodleStickerSpriteResizeSettings settings)
+        {
+            bool isCustomSize = settings.targetSizeMode == DoodleStickerTargetSizeMode.Custom;
+            if (isCustomSize && settings.canvasShape == DoodleStickerCanvasShape.PowerOfTwoPerAxis)
+            {
+                return DoodleStickerCanvasShape.FitToArt;
+            }
+            if (!isCustomSize && settings.canvasShape == DoodleStickerCanvasShape.FitToArt)
+            {
+                return DoodleStickerCanvasShape.PowerOfTwoPerAxis;
+            }
+            return settings.canvasShape;
+        }
+
+        private static Vector2Int ResolveCanvasSize(DoodleStickerSpriteResizeSettings settings, Vector2Int targetSize, Vector2Int contentOutputSize, int padding)
+        {
+            Vector2Int paddedContentSize = new Vector2Int(contentOutputSize.x + padding * 2, contentOutputSize.y + padding * 2);
+            switch (GetEffectiveCanvasShape(settings))
+            {
+                case DoodleStickerCanvasShape.PowerOfTwoPerAxis:
+                    return new Vector2Int(
+                        Mathf.Min(Mathf.NextPowerOfTwo(paddedContentSize.x), targetSize.x),
+                        Mathf.Min(Mathf.NextPowerOfTwo(paddedContentSize.y), targetSize.y));
+                case DoodleStickerCanvasShape.FitToArt:
+                    return settings.roundToMultipleOfFour
+                        ? new Vector2Int(
+                            Mathf.Min(RoundUpToMultipleOfFour(paddedContentSize.x), targetSize.x),
+                            Mathf.Min(RoundUpToMultipleOfFour(paddedContentSize.y), targetSize.y))
+                        : paddedContentSize;
+                default:
+                    return targetSize;
+            }
+        }
+
+        private static int RoundUpToMultipleOfFour(int value)
+        {
+            return (value + 3) / 4 * 4;
         }
 
         public static string GetOutputPath(DoodleStickerSpriteSourceImage sourceImage, DoodleStickerSpriteResizePlan plan, DoodleStickerSpriteResizeSettings settings)

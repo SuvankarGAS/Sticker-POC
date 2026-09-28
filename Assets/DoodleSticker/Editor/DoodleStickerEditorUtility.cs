@@ -45,6 +45,22 @@ namespace DoodleStickers.EditorTooling
 
         public static void DrawPeelSettings(SerializedProperty peelProperty, bool isPlaying, DoodleStickerPeel livePeel, Action flattenPose, Action resetPose, Action peelAutomatically, Action flattenAutomatically)
         {
+            DrawSectionHeader("Realistic Peeling");
+            SerializedProperty requireEdgeGrabProperty = DrawChild(peelProperty, "requireEdgeGrab");
+            if (requireEdgeGrabProperty.boolValue)
+            {
+                EditorGUI.indentLevel++;
+                DrawChild(peelProperty, "edgeGrabDistance");
+                EditorGUI.indentLevel--;
+            }
+            SerializedProperty restrictDirectionProperty = DrawChild(peelProperty, "restrictPeelDirection");
+            if (restrictDirectionProperty.boolValue)
+            {
+                EditorGUI.indentLevel++;
+                DrawChild(peelProperty, "maximumPeelAngle");
+                EditorGUI.indentLevel--;
+            }
+
             DrawSectionHeader("Release");
             DrawChild(peelProperty, "releaseBehaviour");
             DrawChild(peelProperty, "dragSmoothingTime");

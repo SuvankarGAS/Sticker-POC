@@ -364,6 +364,16 @@ namespace DoodleStickers
             return camera != null && TryGetStickerPoint(camera.ScreenPointToRay(screenPosition), out stickerPoint, out _, out _);
         }
 
+        public bool CanStartPeelAt(Vector2 stickerPoint)
+        {
+            DoodleStickerSurfaceRegion touchedRegion = HitTest(stickerPoint);
+            if (touchedRegion == DoodleStickerSurfaceRegion.Lifted)
+            {
+                return true;
+            }
+            return touchedRegion == DoodleStickerSurfaceRegion.Stuck && peel.CanStartNewPeelAt(shape.EvaluateGrabEdge(stickerPoint, hitTestMode));
+        }
+
         public DoodleStickerSurfaceRegion HitTest(Vector2 stickerPoint)
         {
             if (!shape.IsValid || peel.IsPeeledOff)
@@ -403,7 +413,11 @@ namespace DoodleStickers
                 return;
             }
 
-            if (peel.TryBeginPointer(eventData.pointerId, stickerPoint, HitTest(stickerPoint)))
+            DoodleStickerSurfaceRegion touchedRegion = HitTest(stickerPoint);
+            DoodleStickerGrabEdge grabEdge = touchedRegion == DoodleStickerSurfaceRegion.Stuck
+                ? shape.EvaluateGrabEdge(stickerPoint, hitTestMode)
+                : default;
+            if (peel.TryBeginPointer(eventData.pointerId, stickerPoint, touchedRegion, grabEdge))
             {
                 isMeshDirty = true;
             }

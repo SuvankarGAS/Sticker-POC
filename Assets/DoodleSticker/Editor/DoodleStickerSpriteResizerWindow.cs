@@ -9,8 +9,18 @@ namespace DoodleStickers.EditorTooling
         private const string SettingsPreferenceKey = "DoodleStickers.SpriteResizer.Settings";
         private const float PreviewThumbnailSize = 40f;
 
+        private static readonly GUIContent SizeModeLabel = new GUIContent("Size Mode", "Power Of Two: pick a standard square size.\nCustom: type any width and height.");
         private static readonly GUIContent TargetSizeLabel = new GUIContent("Target Size", "Power-of-two size of the new texture. The sprite is scaled to fit inside it, keeping its aspect ratio.");
+        private static readonly GUIContent CustomWidthLabel = new GUIContent("Width", "Maximum width of the new texture in pixels. The sprite is scaled to fit inside Width x Height, keeping its aspect ratio.");
+        private static readonly GUIContent CustomHeightLabel = new GUIContent("Height", "Maximum height of the new texture in pixels. The sprite is scaled to fit inside Width x Height, keeping its aspect ratio.");
+        private static readonly GUIContent RoundToMultipleOfFourLabel = new GUIContent("Multiple Of 4", "Keep both sides a multiple of 4 pixels. Required for DXT/BC and Crunch compression; ASTC and ETC2 work with any size.");
         private static readonly GUIContent CanvasShapeLabel = new GUIContent("Canvas Shape", "Square: always Target Size x Target Size.\nPower Of Two Per Axis: each side is the smallest power of two that fits the scaled sprite, up to Target Size. Saves memory for wide or tall sprites.");
+        private static readonly GUIContent CustomCanvasShapeLabel = new GUIContent("Canvas Shape", "Full Target Size: always exactly Width x Height, with the sprite centred.\nFit To Art: the canvas hugs the scaled sprite plus padding, never larger than Width x Height.");
+        private static readonly GUIContent[] PowerOfTwoCanvasShapeOptions = { new GUIContent("Square"), new GUIContent("Power Of Two Per Axis") };
+        private static readonly GUIContent[] CustomCanvasShapeOptions = { new GUIContent("Full Target Size"), new GUIContent("Fit To Art") };
+        private static readonly GUIContent[] SizeModeOptions = { new GUIContent("Power Of Two"), new GUIContent("Custom") };
+        private static readonly int[] PowerOfTwoCanvasShapeValues = { (int)DoodleStickerCanvasShape.FullTargetSize, (int)DoodleStickerCanvasShape.PowerOfTwoPerAxis };
+        private static readonly int[] CustomCanvasShapeValues = { (int)DoodleStickerCanvasShape.FullTargetSize, (int)DoodleStickerCanvasShape.FitToArt };
         private static readonly GUIContent PaddingLabel = new GUIContent("Padding", "Transparent pixels kept around the sprite on every side, so filtering and the curl edge never touch the texture border.");
         private static readonly GUIContent TrimLabel = new GUIContent("Trim Transparent Borders", "Crop empty space around the art before scaling, so more of the new texture is used for the art itself.");
         private static readonly GUIContent UpscaleLabel = new GUIContent("Allow Upscaling", "Enlarge sprites smaller than the target. Off keeps small sprites at their original resolution.");
@@ -38,13 +48,13 @@ namespace DoodleStickers.EditorTooling
             return window;
         }
 
-        [MenuItem("Assets/Doodle Stickers/Resize Sprites To Power Of Two", false, 1100)]
+        [MenuItem("Assets/Doodle Stickers/Resize Sprites", false, 1100)]
         private static void OpenWithSelection()
         {
             Open().AddSprites(GetSelectedSprites());
         }
 
-        [MenuItem("Assets/Doodle Stickers/Resize Sprites To Power Of Two", true)]
+        [MenuItem("Assets/Doodle Stickers/Resize Sprites", true)]
         private static bool CanOpenWithSelection()
         {
             return GetSelectedSprites().Count > 0;
@@ -153,20 +163,16 @@ namespace DoodleStickers.EditorTooling
             EditorGUILayout.LabelField("Output", EditorStyles.boldLabel);
             EditorGUI.BeginChangeCheck();
 
-            string[] sizeLabels = new string[DoodleStickerSpriteResizer.PowerOfTwoSizes.Length];
-            int selectedSizeIndex = 0;
-            for (int sizeIndex = 0; sizeIndex < sizeLabels.Length; sizeIndex++)
+            settings.targetSizeMode = (DoodleStickerTargetSizeMode)EditorGUILayout.Popup(SizeModeLabel, (int)settings.targetSizeMode, SizeModeOptions);
+            if (settings.targetSizeMode == DoodleStickerTargetSizeMode.Custom)
             {
-                sizeLabels[sizeIndex] = DoodleStickerSpriteResizer.PowerOfTwoSizes[sizeIndex].ToString();
-                if (DoodleStickerSpriteResizer.PowerOfTwoSizes[sizeIndex] == settings.targetSize)
-                {
-                    selectedSizeIndex = sizeIndex;
-                }
+                DrawCustomTargetSize();
             }
-            selectedSizeIndex = EditorGUILayout.Popup(TargetSizeLabel, selectedSizeIndex, sizeLabels);
-            settings.targetSize = DoodleStickerSpriteResizer.PowerOfTwoSizes[selectedSizeIndex];
+            else
+            {
+                DrawPowerOfTwoTargetSize();
+            }
 
-            settings.canvasShape = (DoodleStickerCanvasShape)EditorGUILayout.EnumPopup(CanvasShapeLabel, settings.canvasShape);
             settings.padding = EditorGUILayout.IntSlider(PaddingLabel, settings.padding, 0, 32);
             settings.trimTransparentBorders = EditorGUILayout.Toggle(TrimLabel, settings.trimTransparentBorders);
             settings.allowUpscaling = EditorGUILayout.Toggle(UpscaleLabel, settings.allowUpscaling);
@@ -201,6 +207,123 @@ namespace DoodleStickers.EditorTooling
                 EditorGUILayout.HelpBox("The output folder must be inside Assets.", MessageType.Error);
             }
             EditorGUILayout.HelpBox("Originals are never changed. If a Sprite Atlas packs the output folder, both the originals and the resized copies are packed; keep them in separate folders.", MessageType.None);
+        }
+
+        private void DrawPowerOfTwoTargetSize()
+        {
+            string[] sizeLabels = new string[DoodleStickerSpriteResizer.PowerOfTwoSizes.Length];
+            int selectedSizeIndex = 0;
+            for (int sizeIndex = 0; sizeIndex < sizeLabels.Length; sizeIndex++)
+            {
+                sizeLabels[sizeIndex] = DoodleStickerSpriteResizer.PowerOfTwoSizes[sizeIndex].ToString();
+                if (DoodleStickerSpriteResizer.PowerOfTwoSizes[sizeIndex] == settings.targetSize)
+                {
+                    selectedSizeIndex = sizeIndex;
+                }
+            }
+            selectedSizeIndex = EditorGUILayout.Popup(TargetSizeLabel, selectedSizeIndex, sizeLabels);
+            settings.targetSize = DoodleStickerSpriteResizer.PowerOfTwoSizes[selectedSizeIndex];
+
+            settings.canvasShape = DrawCanvasShapePopup(CanvasShapeLabel, PowerOfTwoCanvasShapeOptions, PowerOfTwoCanvasShapeValues);
+        }
+
+        private void DrawCustomTargetSize()
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.PrefixLabel(new GUIContent("Target Size", CustomWidthLabel.tooltip));
+                float previousLabelWidth = EditorGUIUtility.labelWidth;
+                EditorGUIUtility.labelWidth = 44f;
+                settings.customTargetWidth = Mathf.Clamp(EditorGUILayout.DelayedIntField(CustomWidthLabel, settings.customTargetWidth), DoodleStickerSpriteResizer.MinimumCustomSize, DoodleStickerSpriteResizer.MaximumCustomSize);
+                settings.customTargetHeight = Mathf.Clamp(EditorGUILayout.DelayedIntField(CustomHeightLabel, settings.customTargetHeight), DoodleStickerSpriteResizer.MinimumCustomSize, DoodleStickerSpriteResizer.MaximumCustomSize);
+                EditorGUIUtility.labelWidth = previousLabelWidth;
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUILayout.Space(EditorGUIUtility.labelWidth);
+                if (GUILayout.Button("Square", EditorStyles.miniButtonLeft))
+                {
+                    int longestSide = Mathf.Max(settings.customTargetWidth, settings.customTargetHeight);
+                    settings.customTargetWidth = longestSide;
+                    settings.customTargetHeight = longestSide;
+                    GUI.FocusControl(null);
+                }
+                using (new EditorGUI.DisabledScope(!TryGetFirstSpriteAspect(out _)))
+                {
+                    if (GUILayout.Button(new GUIContent("Match Sprite Aspect", "Keep the longer side and set the other from the first sprite's art, so no canvas space is wasted."), EditorStyles.miniButtonRight))
+                    {
+                        MatchFirstSpriteAspect();
+                        GUI.FocusControl(null);
+                    }
+                }
+            }
+
+            settings.roundToMultipleOfFour = EditorGUILayout.Toggle(RoundToMultipleOfFourLabel, settings.roundToMultipleOfFour);
+            settings.canvasShape = DrawCanvasShapePopup(CustomCanvasShapeLabel, CustomCanvasShapeOptions, CustomCanvasShapeValues);
+
+            Vector2Int effectiveSize = DoodleStickerSpriteResizer.GetEffectiveTargetSize(settings);
+            if (effectiveSize.x != settings.customTargetWidth || effectiveSize.y != settings.customTargetHeight)
+            {
+                EditorGUILayout.HelpBox("Rounded down to " + effectiveSize.x + "×" + effectiveSize.y + " to keep both sides a multiple of 4.", MessageType.Info);
+            }
+        }
+
+        private DoodleStickerCanvasShape DrawCanvasShapePopup(GUIContent label, GUIContent[] options, int[] values)
+        {
+            int currentValue = (int)DoodleStickerSpriteResizer.GetEffectiveCanvasShape(settings);
+            return (DoodleStickerCanvasShape)EditorGUILayout.IntPopup(label, currentValue, options, values);
+        }
+
+        private bool TryGetFirstSpriteAspect(out float aspect)
+        {
+            aspect = 1f;
+            for (int spriteIndex = 0; spriteIndex < sprites.Count; spriteIndex++)
+            {
+                Sprite sprite = sprites[spriteIndex];
+                if (sprite == null)
+                {
+                    continue;
+                }
+                if (!sourceSummaries.TryGetValue(sprite, out DoodleStickerSpriteSourceImage summary))
+                {
+                    DescribePlan(sprite);
+                    if (!sourceSummaries.TryGetValue(sprite, out summary))
+                    {
+                        continue;
+                    }
+                }
+
+                RectInt artRect = settings.trimTransparentBorders && summary.OpaqueBounds.width > 0
+                    ? summary.OpaqueBounds
+                    : new RectInt(0, 0, summary.Width, summary.Height);
+                aspect = (float)artRect.width / artRect.height;
+                return true;
+            }
+            return false;
+        }
+
+        private void MatchFirstSpriteAspect()
+        {
+            if (!TryGetFirstSpriteAspect(out float aspect))
+            {
+                return;
+            }
+
+            int padding = settings.padding * 2;
+            int longestSide = Mathf.Max(settings.customTargetWidth, settings.customTargetHeight);
+            int artLongestSide = Mathf.Max(longestSide - padding, 1);
+            if (aspect >= 1f)
+            {
+                settings.customTargetWidth = longestSide;
+                settings.customTargetHeight = Mathf.Clamp(Mathf.RoundToInt(artLongestSide / aspect) + padding, DoodleStickerSpriteResizer.MinimumCustomSize, DoodleStickerSpriteResizer.MaximumCustomSize);
+            }
+            else
+            {
+                settings.customTargetHeight = longestSide;
+                settings.customTargetWidth = Mathf.Clamp(Mathf.RoundToInt(artLongestSide * aspect) + padding, DoodleStickerSpriteResizer.MinimumCustomSize, DoodleStickerSpriteResizer.MaximumCustomSize);
+            }
+            SaveSettings();
         }
 
         private void DrawResizeButton()
